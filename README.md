@@ -9,7 +9,7 @@ A simple two-stickman fighting game with Mortal Kombat-inspired flow:
 
 ## Run
 
-Open `/home/runner/work/StickmanFight/StickmanFight/index.html` in any modern browser.
+Open `index.html` in any modern browser.
 
 ## Controls
 

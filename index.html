@@ -62,7 +62,8 @@
     const GROUND_Y = H - 95;
 
     const keys = Object.create(null);
-    const pressedThisFrame = Object.create(null);
+    const justPressed = Object.create(null);
+    const MAX_FRAME_TIME = 0.033;
     const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
     const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -110,7 +111,7 @@
 
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
-      if (!keys[k]) pressedThisFrame[k] = true;
+      if (!keys[k]) justPressed[k] = true;
       keys[k] = true;
     });
     window.addEventListener("keyup", (e) => (keys[e.key.toLowerCase()] = false));
@@ -233,10 +234,10 @@
       player.vx += move * 920 * dt;
       if (move !== 0) player.dir = move;
 
-      if (pressedThisFrame["j"]) tryAttack(player, enemy, "punch");
-      if (pressedThisFrame["k"]) tryAttack(player, enemy, "sweep");
-      if (pressedThisFrame["l"]) tryAttack(player, enemy, "special");
-      if (pressedThisFrame["i"]) startTakedown(player, enemy);
+      if (justPressed["j"]) tryAttack(player, enemy, "punch");
+      if (justPressed["k"]) tryAttack(player, enemy, "sweep");
+      if (justPressed["l"]) tryAttack(player, enemy, "special");
+      if (justPressed["i"]) startTakedown(player, enemy);
     }
 
     function updateFighter(f, dt) {
@@ -421,11 +422,11 @@
 
     let last = performance.now();
     function loop(now) {
-      const rawDt = clamp((now - last) / 1000, 0, 0.033);
+      const rawDt = clamp((now - last) / 1000, 0, MAX_FRAME_TIME);
       last = now;
       game.t += rawDt;
 
-      if (pressedThisFrame["r"]) reset();
+      if (justPressed["r"]) reset();
       const dt = rawDt * game.timeScale;
 
       updatePlayer(dt);
@@ -439,7 +440,7 @@
       updateCamera(rawDt);
       draw();
 
-      for (const k in pressedThisFrame) delete pressedThisFrame[k];
+      for (const k in justPressed) delete justPressed[k];
       requestAnimationFrame(loop);
     }
 
