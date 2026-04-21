@@ -50,7 +50,7 @@
 <body>
   <div class="wrap">
     <canvas id="game" width="1100" height="620"></canvas>
-    <div class="help">
+    <div class="help" aria-label="Controls: Move A or D, Punch J, Sweep K, Special L, Takedown I when enemy health is low, Restart R">
       Move <kbd>A</kbd>/<kbd>D</kbd> · Punch <kbd>J</kbd> · Sweep <kbd>K</kbd> · Special <kbd>L</kbd> · Takedown <kbd>I</kbd> (enemy low HP) · Restart <kbd>R</kbd>
     </div>
   </div>
@@ -69,7 +69,7 @@
     const keys = Object.create(null);
     const justPressed = Object.create(null);
     const MAX_FRAME_TIME = 0.033;
-    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
     const lerp = (a, b, t) => a + (b - a) * t;
 
     function makeFighter(name, x, color, isAI = false) {
