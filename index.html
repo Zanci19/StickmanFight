@@ -60,6 +60,11 @@
     const W = canvas.width;
     const H = canvas.height;
     const GROUND_Y = H - 95;
+    const TAKEDOWN_HP_THRESHOLD = 45;
+    const AI_TAKEDOWN_CHANCE = 0.025;
+    const AI_THINK_MIN = 0.24;
+    const AI_THINK_RANGE = 0.35;
+    const AI_ATTACK_WEIGHTS = { punch: 0.52, sweep: 0.84 };
 
     const keys = Object.create(null);
     const justPressed = Object.create(null);
@@ -161,7 +166,7 @@
         !attacker.dead &&
         !target.dead &&
         attacker.takedownCd <= 0 &&
-        target.hp <= 45 &&
+        target.hp <= TAKEDOWN_HP_THRESHOLD &&
         Math.abs(attacker.x - target.x) < 170
       );
     }
@@ -212,7 +217,7 @@
       const dist = Math.abs(player.x - enemy.x);
       enemy.dir = Math.sign(player.x - enemy.x) || enemy.dir;
 
-      if (canDoTakedown(enemy, player) && Math.random() < 0.025) {
+      if (canDoTakedown(enemy, player) && Math.random() < AI_TAKEDOWN_CHANCE) {
         startTakedown(enemy, player);
         return;
       }
@@ -220,10 +225,10 @@
       if (dist > 130) {
         enemy.vx += enemy.dir * 640 * dt;
       } else if (game.aiThink <= 0 && enemy.attackCd <= 0) {
-        game.aiThink = 0.24 + Math.random() * 0.35;
+        game.aiThink = AI_THINK_MIN + Math.random() * AI_THINK_RANGE;
         const roll = Math.random();
-        if (roll < 0.52) tryAttack(enemy, player, "punch");
-        else if (roll < 0.84) tryAttack(enemy, player, "sweep");
+        if (roll < AI_ATTACK_WEIGHTS.punch) tryAttack(enemy, player, "punch");
+        else if (roll < AI_ATTACK_WEIGHTS.sweep) tryAttack(enemy, player, "sweep");
         else tryAttack(enemy, player, "special");
       }
     }
@@ -432,7 +437,7 @@
       updatePlayer(dt);
       updateAI(dt);
 
-      if (game.takedown) updateTakedown(rawDt);
+      if (game.takedown) updateTakedown(dt);
 
       updateFighter(player, dt);
       updateFighter(enemy, dt);
