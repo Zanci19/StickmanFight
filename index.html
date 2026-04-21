@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stickman Fight</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, Arial, sans-serif;
+      background: radial-gradient(circle at top, #1c2235, #090b12 65%);
+      color: #f4f5fa;
+      display: grid;
+      place-items: center;
+      min-height: 100vh;
+    }
+    .wrap {
+      width: min(1100px, 100vw);
+      padding: 14px;
+      box-sizing: border-box;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      border: 1px solid #2e3653;
+      border-radius: 12px;
+      background: linear-gradient(#141b2a, #0a0d17 62%);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+    .help {
+      margin-top: 10px;
+      opacity: 0.9;
+      font-size: 0.92rem;
+      line-height: 1.35;
+    }
+    kbd {
+      border: 1px solid #55608c;
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 0 5px;
+      font-size: 0.82rem;
+      background: #202741;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game" width="1100" height="620"></canvas>
+    <div class="help">
+      Move <kbd>A</kbd>/<kbd>D</kbd> · Punch <kbd>J</kbd> · Sweep <kbd>K</kbd> · Special <kbd>L</kbd> · Takedown <kbd>I</kbd> (enemy low HP) · Restart <kbd>R</kbd>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width;
+    const H = canvas.height;
+    const GROUND_Y = H - 95;
+
+    const keys = Object.create(null);
+    const pressedThisFrame = Object.create(null);
+    const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    function makeFighter(name, x, color, isAI = false) {
+      return {
+        name,
+        x,
+        y: GROUND_Y,
+        vx: 0,
+        dir: 1,
+        color,
+        isAI,
+        hp: 100,
+        attackCd: 0,
+        specialCd: 0,
+        takedownCd: 0,
+        hitStun: 0,
+        attackFlash: 0,
+        bodyRecoil: { x: 0, y: 0 },
+        limbRecoil: { arm: 0, leg: 0, torso: 0, head: 0 },
+        dead: false,
+      };
+    }
+
+    const player = makeFighter("Player", 320, "#f4f5fa");
+    const enemy = makeFighter("Enemy", 780, "#ff6f8e", true);
+    enemy.dir = -1;
+
+    const game = {
+      over: false,
+      winner: "",
+      timeScale: 1,
+      aiThink: 0,
+      takedown: null,
+      camera: { x: W / 2, y: H / 2, zoom: 1, angle: 0, shake: 0 },
+      t: 0,
+    };
+
+    const ATTACKS = {
+      punch: { damage: 8, range: 110, knock: 240, cd: 0.26, recoil: { arm: 0.95, torso: 0.4, head: 0.2 } },
+      sweep: { damage: 12, range: 140, knock: 320, cd: 0.42, recoil: { leg: 1.2, torso: 0.6, head: 0.35 } },
+      special: { damage: 18, range: 155, knock: 460, cd: 1.0, recoil: { arm: 1.0, leg: 0.7, torso: 0.95, head: 0.7 } },
+      takedownHit: { damage: 9, range: 180, knock: 500, cd: 0, recoil: { arm: 1.0, leg: 1.1, torso: 1.2, head: 0.9 } },
+    };
+
+    window.addEventListener("keydown", (e) => {
+      const k = e.key.toLowerCase();
+      if (!keys[k]) pressedThisFrame[k] = true;
+      keys[k] = true;
+    });
+    window.addEventListener("keyup", (e) => (keys[e.key.toLowerCase()] = false));
+
+    function tryAttack(attacker, target, type) {
+      const a = ATTACKS[type];
+      if (attacker.attackCd > 0 || attacker.hitStun > 0 || attacker.dead || target.dead) return false;
+      if (type === "special" && attacker.specialCd > 0) return false;
+
+      attacker.attackCd = a.cd;
+      attacker.attackFlash = 0.12;
+      if (type === "special") attacker.specialCd = 2.1;
+
+      const dist = Math.abs(target.x - attacker.x);
+      const facing = Math.sign(target.x - attacker.x) || attacker.dir;
+      attacker.dir = facing;
+
+      if (dist <= a.range) {
+        applyHit(attacker, target, a);
+      }
+      return true;
+    }
+
+    function applyHit(attacker, target, attack) {
+      target.hp = clamp(target.hp - attack.damage, 0, 100);
+      target.hitStun = 0.14;
+      const direction = Math.sign(target.x - attacker.x) || 1;
+      target.vx += direction * attack.knock;
+      target.bodyRecoil.x -= direction * 18;
+      target.bodyRecoil.y -= 4;
+      target.limbRecoil.arm += attack.recoil.arm || 0;
+      target.limbRecoil.leg += attack.recoil.leg || 0;
+      target.limbRecoil.torso += attack.recoil.torso || 0;
+      target.limbRecoil.head += attack.recoil.head || 0;
+      game.camera.shake = Math.max(game.camera.shake, 9 + attack.damage * 0.55);
+      if (target.hp <= 0) {
+        target.dead = true;
+        game.over = true;
+        game.winner = attacker.name;
+      }
+    }
+
+    function canDoTakedown(attacker, target) {
+      return (
+        !game.over &&
+        !game.takedown &&
+        !attacker.dead &&
+        !target.dead &&
+        attacker.takedownCd <= 0 &&
+        target.hp <= 45 &&
+        Math.abs(attacker.x - target.x) < 170
+      );
+    }
+
+    function startTakedown(attacker, target) {
+      if (!canDoTakedown(attacker, target)) return false;
+      game.takedown = { attacker, target, phase: 0, phaseT: 0, hitApplied: false };
+      attacker.takedownCd = 8;
+      attacker.attackCd = 1.8;
+      target.attackCd = 1.8;
+      return true;
+    }
+
+    function updateTakedown(dt) {
+      const tk = game.takedown;
+      if (!tk) return;
+
+      game.timeScale = 0.35;
+      tk.phaseT += dt;
+
+      const dir = Math.sign(tk.target.x - tk.attacker.x) || 1;
+      tk.attacker.dir = dir;
+      tk.target.dir = -dir;
+      tk.attacker.x = lerp(tk.attacker.x, W / 2 - 85, 0.18);
+      tk.target.x = lerp(tk.target.x, W / 2 + 85, 0.18);
+
+      if (!tk.hitApplied && tk.phaseT >= 0.33) {
+        applyHit(tk.attacker, tk.target, ATTACKS.takedownHit);
+        tk.hitApplied = true;
+      }
+
+      if (tk.phaseT >= 0.92) {
+        tk.phase += 1;
+        tk.phaseT = 0;
+        tk.hitApplied = false;
+      }
+
+      if (tk.phase >= 3 || tk.target.dead) {
+        game.takedown = null;
+        game.timeScale = 1;
+        game.camera.shake = Math.max(game.camera.shake, 14);
+      }
+    }
+
+    function updateAI(dt) {
+      if (game.over || game.takedown || enemy.dead) return;
+      game.aiThink -= dt;
+      const dist = Math.abs(player.x - enemy.x);
+      enemy.dir = Math.sign(player.x - enemy.x) || enemy.dir;
+
+      if (canDoTakedown(enemy, player) && Math.random() < 0.025) {
+        startTakedown(enemy, player);
+        return;
+      }
+
+      if (dist > 130) {
+        enemy.vx += enemy.dir * 640 * dt;
+      } else if (game.aiThink <= 0 && enemy.attackCd <= 0) {
+        game.aiThink = 0.24 + Math.random() * 0.35;
+        const roll = Math.random();
+        if (roll < 0.52) tryAttack(enemy, player, "punch");
+        else if (roll < 0.84) tryAttack(enemy, player, "sweep");
+        else tryAttack(enemy, player, "special");
+      }
+    }
+
+    function updatePlayer(dt) {
+      if (game.over || game.takedown || player.dead) return;
+      const move = (keys["d"] ? 1 : 0) - (keys["a"] ? 1 : 0);
+      player.vx += move * 920 * dt;
+      if (move !== 0) player.dir = move;
+
+      if (pressedThisFrame["j"]) tryAttack(player, enemy, "punch");
+      if (pressedThisFrame["k"]) tryAttack(player, enemy, "sweep");
+      if (pressedThisFrame["l"]) tryAttack(player, enemy, "special");
+      if (pressedThisFrame["i"]) startTakedown(player, enemy);
+    }
+
+    function updateFighter(f, dt) {
+      f.attackCd = Math.max(0, f.attackCd - dt);
+      f.specialCd = Math.max(0, f.specialCd - dt);
+      f.takedownCd = Math.max(0, f.takedownCd - dt);
+      f.hitStun = Math.max(0, f.hitStun - dt);
+      f.attackFlash = Math.max(0, f.attackFlash - dt);
+
+      f.vx *= 0.86;
+      f.x += f.vx * dt;
+      f.x = clamp(f.x, 70, W - 70);
+
+      f.bodyRecoil.x *= 0.82;
+      f.bodyRecoil.y *= 0.78;
+      f.limbRecoil.arm *= 0.84;
+      f.limbRecoil.leg *= 0.84;
+      f.limbRecoil.torso *= 0.82;
+      f.limbRecoil.head *= 0.82;
+    }
+
+    function updateCamera(dt) {
+      const midX = (player.x + enemy.x) * 0.5;
+      const dist = Math.abs(player.x - enemy.x);
+      let targetZoom = clamp(1.36 - dist / 900, 0.86, 1.18);
+      let targetX = midX;
+      let targetY = H / 2 + 10;
+      let targetAngle = 0;
+
+      if (game.takedown) {
+        const tk = game.takedown;
+        const progress = tk.phase + tk.phaseT;
+        targetZoom = 1.22 + 0.17 * Math.sin(progress * 2.7);
+        targetX = W / 2 + 40 * Math.cos(progress * 3.1);
+        targetY = H / 2 + 24 * Math.sin(progress * 2.3);
+        targetAngle = 0.05 * Math.sin(progress * 4.2) + 0.03 * Math.cos(progress * 2.6);
+      }
+
+      game.camera.x = lerp(game.camera.x, targetX, 0.1);
+      game.camera.y = lerp(game.camera.y, targetY, 0.1);
+      game.camera.zoom = lerp(game.camera.zoom, targetZoom, 0.09);
+      game.camera.angle = lerp(game.camera.angle, targetAngle, 0.12);
+      game.camera.shake *= 0.78;
+      game.camera.shake = Math.max(0, game.camera.shake - 32 * dt);
+    }
+
+    function drawFighter(f) {
+      const torsoLean = f.limbRecoil.torso * (f.dir > 0 ? -1 : 1) * 0.23;
+      const headBack = f.limbRecoil.head * (f.dir > 0 ? -1 : 1) * 6;
+      const armKick = f.limbRecoil.arm * 21;
+      const legKick = f.limbRecoil.leg * 17;
+
+      const x = f.x + f.bodyRecoil.x;
+      const y = f.y + f.bodyRecoil.y;
+      const alpha = f.dead ? 0.55 : 1;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(x, y);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = f.attackFlash > 0 ? "#ffe07a" : f.color;
+      ctx.lineWidth = 8;
+
+      ctx.save();
+      ctx.rotate(torsoLean);
+      ctx.beginPath();
+      ctx.moveTo(0, -70);
+      ctx.lineTo(0, -20);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.arc(headBack, -92, 15, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const armY = -60;
+      ctx.beginPath();
+      ctx.moveTo(0, armY);
+      ctx.lineTo(-26 - f.dir * armKick * 0.45, -30 - armKick * 0.36);
+      ctx.moveTo(0, armY);
+      ctx.lineTo(26 - f.dir * armKick, -37 + armKick * 0.22);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(0, -20);
+      ctx.lineTo(-18 - f.dir * legKick * 0.25, 24 + legKick * 0.3);
+      ctx.moveTo(0, -20);
+      ctx.lineTo(18 - f.dir * legKick * 0.78, 24 - legKick * 0.22);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawArena() {
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, "#182034");
+      grad.addColorStop(1, "#0a0d17");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.fillStyle = "rgba(120,150,220,0.08)";
+      for (let i = 0; i < 18; i++) {
+        ctx.fillRect(i * 80 + ((game.t * 45) % 80), 85 + Math.sin(game.t * 0.4 + i) * 8, 45, 6);
+      }
+
+      ctx.fillStyle = "#222a44";
+      ctx.fillRect(0, GROUND_Y + 20, W, H - GROUND_Y);
+      ctx.fillStyle = "#38466f";
+      ctx.fillRect(0, GROUND_Y + 14, W, 5);
+    }
+
+    function drawHUD() {
+      const barW = 360;
+      const barH = 20;
+      function bar(x, y, hp, color, label, cdText = "") {
+        ctx.fillStyle = "rgba(18,22,35,0.8)";
+        ctx.fillRect(x, y, barW, barH);
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, barW * (hp / 100), barH);
+        ctx.strokeStyle = "#5e6e9b";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, barW, barH);
+        ctx.fillStyle = "#f4f5fa";
+        ctx.font = "bold 14px Inter, Arial";
+        ctx.fillText(label, x, y - 8);
+        if (cdText) ctx.fillText(cdText, x + 200, y - 8);
+      }
+
+      bar(30, 24, player.hp, "#7ce38b", "PLAYER", player.specialCd > 0 ? `Special CD: ${player.specialCd.toFixed(1)}s` : "");
+      bar(W - 390, 24, enemy.hp, "#ff7a9d", "ENEMY", enemy.specialCd > 0 ? `Special CD: ${enemy.specialCd.toFixed(1)}s` : "");
+
+      if (game.takedown) {
+        ctx.fillStyle = "#ffe07a";
+        ctx.font = "bold 26px Inter, Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`TAKEDOWN! HIT ${game.takedown.phase + 1}/3`, W / 2, 64);
+        ctx.textAlign = "left";
+      }
+
+      if (game.over) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 56px Inter, Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`${game.winner} Wins`, W / 2, H / 2 - 8);
+        ctx.font = "20px Inter, Arial";
+        ctx.fillText("Press R to restart", W / 2, H / 2 + 30);
+        ctx.textAlign = "left";
+      }
+    }
+
+    function draw() {
+      drawArena();
+
+      const shakeX = (Math.random() - 0.5) * game.camera.shake;
+      const shakeY = (Math.random() - 0.5) * game.camera.shake;
+
+      ctx.save();
+      ctx.translate(W / 2 + shakeX, H / 2 + shakeY);
+      ctx.rotate(game.camera.angle);
+      ctx.scale(game.camera.zoom, game.camera.zoom);
+      ctx.translate(-game.camera.x, -game.camera.y);
+
+      drawFighter(player);
+      drawFighter(enemy);
+      ctx.restore();
+
+      drawHUD();
+    }
+
+    function reset() {
+      Object.assign(player, makeFighter("Player", 320, "#f4f5fa"));
+      Object.assign(enemy, makeFighter("Enemy", 780, "#ff6f8e", true));
+      enemy.dir = -1;
+      game.over = false;
+      game.winner = "";
+      game.takedown = null;
+      game.timeScale = 1;
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const rawDt = clamp((now - last) / 1000, 0, 0.033);
+      last = now;
+      game.t += rawDt;
+
+      if (pressedThisFrame["r"]) reset();
+      const dt = rawDt * game.timeScale;
+
+      updatePlayer(dt);
+      updateAI(dt);
+
+      if (game.takedown) updateTakedown(rawDt);
+
+      updateFighter(player, dt);
+      updateFighter(enemy, dt);
+
+      updateCamera(rawDt);
+      draw();
+
+      for (const k in pressedThisFrame) delete pressedThisFrame[k];
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
