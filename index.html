@@ -65,6 +65,7 @@
     const AI_THINK_MIN = 0.24;
     const AI_THINK_RANGE = 0.35;
     const AI_ATTACK_WEIGHTS = { punch: 0.52, sweep: 0.84 };
+    const ATTACK_ANIM_DURATION = { punch: 0.26, sweep: 0.38, special: 0.56 };
 
     const keys = Object.create(null);
     const justPressed = Object.create(null);
@@ -89,6 +90,17 @@
         attackFlash: 0,
         bodyRecoil: { x: 0, y: 0 },
         limbRecoil: { arm: 0, leg: 0, torso: 0, head: 0 },
+        moveInput: 0,
+        anim: {
+          state: "idle",
+          time: Math.random() * Math.PI * 2,
+          step: Math.random() * Math.PI * 2,
+          attackType: "",
+          attackT: 0,
+          hitT: 0,
+          takedownPhase: 0,
+          takedownT: 0,
+        },
         dead: false,
       };
     }
@@ -128,6 +140,9 @@
 
       attacker.attackCd = a.cd;
       attacker.attackFlash = 0.12;
+      attacker.anim.attackType = type;
+      attacker.anim.attackT = ATTACK_ANIM_DURATION[type] || a.cd;
+      attacker.anim.state = "attack";
       if (type === "special") attacker.specialCd = 2.1;
 
       const dist = Math.abs(target.x - attacker.x);
@@ -147,6 +162,8 @@
       target.vx += direction * attack.knock;
       target.bodyRecoil.x -= direction * 18;
       target.bodyRecoil.y -= 4;
+      target.anim.hitT = 0.22;
+      target.anim.state = "hit";
       target.limbRecoil.arm += attack.recoil.arm || 0;
       target.limbRecoil.leg += attack.recoil.leg || 0;
       target.limbRecoil.torso += attack.recoil.torso || 0;
@@ -177,6 +194,8 @@
       attacker.takedownCd = 8;
       attacker.attackCd = 1.8;
       target.attackCd = 1.8;
+      attacker.anim.state = "takedown";
+      target.anim.state = "takedown";
       return true;
     }
 
@@ -190,6 +209,12 @@
       const dir = Math.sign(tk.target.x - tk.attacker.x) || 1;
       tk.attacker.dir = dir;
       tk.target.dir = -dir;
+      tk.attacker.anim.state = "takedown";
+      tk.target.anim.state = "takedown";
+      tk.attacker.anim.takedownPhase = tk.phase;
+      tk.target.anim.takedownPhase = tk.phase;
+      tk.attacker.anim.takedownT = tk.phaseT;
+      tk.target.anim.takedownT = tk.phaseT;
       tk.attacker.x = lerp(tk.attacker.x, W / 2 - 85, 0.18);
       tk.target.x = lerp(tk.target.x, W / 2 + 85, 0.18);
 
@@ -212,6 +237,7 @@
     }
 
     function updateAI(dt) {
+      enemy.moveInput = 0;
       if (game.over || game.takedown || enemy.dead) return;
       game.aiThink -= dt;
       const dist = Math.abs(player.x - enemy.x);
@@ -223,6 +249,7 @@
       }
 
       if (dist > 130) {
+        enemy.moveInput = enemy.dir;
         enemy.vx += enemy.dir * 640 * dt;
       } else if (game.aiThink <= 0 && enemy.attackCd <= 0) {
         game.aiThink = AI_THINK_MIN + Math.random() * AI_THINK_RANGE;
@@ -234,8 +261,10 @@
     }
 
     function updatePlayer(dt) {
+      player.moveInput = 0;
       if (game.over || game.takedown || player.dead) return;
       const move = (keys["d"] ? 1 : 0) - (keys["a"] ? 1 : 0);
+      player.moveInput = move;
       player.vx += move * 920 * dt;
       if (move !== 0) player.dir = move;
 
@@ -251,6 +280,10 @@
       f.takedownCd = Math.max(0, f.takedownCd - dt);
       f.hitStun = Math.max(0, f.hitStun - dt);
       f.attackFlash = Math.max(0, f.attackFlash - dt);
+      f.anim.time += dt;
+      f.anim.step += dt * (2.2 + Math.abs(f.vx) * 0.016 + Math.abs(f.moveInput) * 2.6);
+      f.anim.attackT = Math.max(0, f.anim.attackT - dt);
+      f.anim.hitT = Math.max(0, f.anim.hitT - dt);
 
       f.vx *= 0.86;
       f.x += f.vx * dt;
@@ -262,6 +295,14 @@
       f.limbRecoil.leg *= 0.84;
       f.limbRecoil.torso *= 0.82;
       f.limbRecoil.head *= 0.82;
+
+      if (f.dead) f.anim.state = "dead";
+      else if (!(game.takedown && f.anim.state === "takedown")) {
+        if (f.anim.attackT > 0) f.anim.state = "attack";
+        else if (f.hitStun > 0 || f.anim.hitT > 0) f.anim.state = "hit";
+        else if (Math.abs(f.moveInput) > 0.01 || Math.abs(f.vx) > 40) f.anim.state = "walk";
+        else f.anim.state = "idle";
+      }
     }
 
     function updateCamera(dt) {
@@ -289,50 +330,152 @@
       game.camera.shake = Math.max(0, game.camera.shake - 32 * dt);
     }
 
-    function drawFighter(f) {
-      const torsoLean = f.limbRecoil.torso * (f.dir > 0 ? -1 : 1) * 0.23;
-      const headBack = f.limbRecoil.head * (f.dir > 0 ? -1 : 1) * 6;
-      const armKick = f.limbRecoil.arm * 21;
-      const legKick = f.limbRecoil.leg * 17;
+    function getFighterPose(f) {
+      const t = f.anim.time;
+      const step = Math.sin(f.anim.step);
+      const invStep = Math.sin(f.anim.step + Math.PI);
+      const walkBlend = clamp(Math.abs(f.vx) / 240 + Math.abs(f.moveInput) * 0.45, 0, 1);
+      const recoilArm = f.limbRecoil.arm * 0.32;
+      const recoilLeg = f.limbRecoil.leg * 0.26;
+      const recoilTorso = f.limbRecoil.torso * 0.12;
+      const recoilHead = f.limbRecoil.head * 1.8;
 
+      const pose = {
+        bodyYOffset: Math.sin(t * 2.8) * 1.4,
+        torsoLean: Math.sin(t * 1.8) * 0.03 + recoilTorso,
+        torsoHeight: 50 + Math.sin(t * 2.2) * 0.8,
+        headDX: recoilHead,
+        headDY: -2 + Math.sin(t * 2.8) * 1.2,
+        shoulderY: 0,
+        hipY: 0,
+        frontArm: { shoulder: 1.05 + Math.sin(t * 2.3) * 0.1, elbow: 0.52 },
+        backArm: { shoulder: 1.22 - Math.sin(t * 2.3) * 0.1, elbow: 0.5 },
+        frontLeg: { hip: 1.45 + walkBlend * 0.45 * step, knee: 0.34 + recoilLeg },
+        backLeg: { hip: 1.45 + walkBlend * 0.45 * invStep, knee: 0.34 + recoilLeg },
+      };
+
+      if (pose.frontArm && walkBlend > 0.05) {
+        pose.frontArm.shoulder += walkBlend * 0.6 * invStep;
+        pose.backArm.shoulder += walkBlend * 0.6 * step;
+      }
+
+      if (f.anim.state === "hit") {
+        const hit = Math.sin(Math.PI * clamp(f.anim.hitT / 0.22, 0, 1));
+        pose.torsoLean += 0.32 * hit;
+        pose.headDX += 8 * hit;
+        pose.frontArm.shoulder = 1.9 - 0.7 * hit + recoilArm;
+        pose.backArm.shoulder = 1.85 - 0.6 * hit + recoilArm * 0.7;
+        pose.frontLeg.hip = 1.7 + 0.35 * hit;
+        pose.backLeg.hip = 1.45 - 0.25 * hit;
+      }
+
+      if (f.anim.state === "attack") {
+        const dur = ATTACK_ANIM_DURATION[f.anim.attackType] || 0.3;
+        const p = clamp(1 - f.anim.attackT / dur, 0, 1);
+        const swing = Math.sin(Math.PI * p);
+
+        if (f.anim.attackType === "punch") {
+          pose.torsoLean -= 0.26 * swing;
+          pose.frontArm.shoulder = 1.7 - 1.9 * swing - recoilArm;
+          pose.frontArm.elbow = 0.68 - 0.6 * swing;
+          pose.backArm.shoulder = 1.35 + 0.5 * swing;
+          pose.frontLeg.hip = 1.52 + 0.18 * swing;
+          pose.backLeg.hip = 1.42 - 0.24 * swing;
+        } else if (f.anim.attackType === "sweep") {
+          pose.bodyYOffset += 8 * swing;
+          pose.torsoLean -= 0.36 * swing;
+          pose.frontArm.shoulder = 1.8 - 0.7 * swing;
+          pose.backArm.shoulder = 1.7 + 0.45 * swing;
+          pose.frontLeg.hip = 1.7 + 0.85 * swing - recoilLeg;
+          pose.frontLeg.knee = 0.16;
+          pose.backLeg.hip = 1.3 - 0.28 * swing;
+        } else if (f.anim.attackType === "special") {
+          pose.bodyYOffset -= 10 * swing;
+          pose.torsoLean -= 0.42 * swing;
+          pose.headDY -= 4.5 * swing;
+          pose.frontArm.shoulder = 2.2 - 2.45 * swing - recoilArm;
+          pose.frontArm.elbow = 0.82 - 0.65 * swing;
+          pose.backArm.shoulder = 2.05 - 1.7 * swing;
+          pose.backArm.elbow = 0.7 - 0.45 * swing;
+          pose.frontLeg.hip = 1.35 + 0.48 * swing;
+          pose.backLeg.hip = 1.32 - 0.38 * swing;
+        }
+      }
+
+      if (f.anim.state === "takedown") {
+        const phaseCurve = Math.sin(Math.PI * clamp(f.anim.takedownT / 0.92, 0, 1));
+        const strike = f.anim.takedownPhase % 2 === 0 ? 1 : -1;
+        pose.torsoLean = -0.28 * phaseCurve * strike;
+        pose.headDY -= 2.5 * phaseCurve;
+        pose.frontArm.shoulder = 2.15 - 2.6 * phaseCurve;
+        pose.frontArm.elbow = 0.9 - 0.72 * phaseCurve;
+        pose.backArm.shoulder = 1.7 - 1.1 * phaseCurve;
+        pose.frontLeg.hip = 1.5 + 0.42 * phaseCurve;
+        pose.backLeg.hip = 1.36 - 0.3 * phaseCurve;
+      }
+
+      if (f.anim.state === "dead") {
+        pose.bodyYOffset = 14;
+        pose.torsoLean = 1.2;
+        pose.torsoHeight = 40;
+        pose.headDY = 15;
+        pose.frontArm = { shoulder: 2.35, elbow: 0.2 };
+        pose.backArm = { shoulder: 2.5, elbow: 0.2 };
+        pose.frontLeg = { hip: 2.15, knee: 0.1 };
+        pose.backLeg = { hip: 2.35, knee: 0.1 };
+      }
+
+      return pose;
+    }
+
+    function limbJoint(ax, ay, len, angle) {
+      return { x: ax + Math.cos(angle) * len, y: ay + Math.sin(angle) * len };
+    }
+
+    function drawLimb(baseX, baseY, cfg) {
+      const upper = limbJoint(baseX, baseY, 24, cfg.shoulder);
+      const lower = limbJoint(upper.x, upper.y, 22, cfg.shoulder + cfg.elbow);
+      ctx.beginPath();
+      ctx.moveTo(baseX, baseY);
+      ctx.lineTo(upper.x, upper.y);
+      ctx.lineTo(lower.x, lower.y);
+      ctx.stroke();
+    }
+
+    function drawFighter(f) {
+      const pose = getFighterPose(f);
       const x = f.x + f.bodyRecoil.x;
-      const y = f.y + f.bodyRecoil.y;
+      const y = f.y + f.bodyRecoil.y + pose.bodyYOffset;
       const alpha = f.dead ? 0.55 : 1;
 
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.translate(x, y);
+      ctx.scale(f.dir, 1);
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.strokeStyle = f.attackFlash > 0 ? "#ffe07a" : f.color;
       ctx.lineWidth = 8;
 
-      ctx.save();
-      ctx.rotate(torsoLean);
-      ctx.beginPath();
-      ctx.moveTo(0, -70);
-      ctx.lineTo(0, -20);
-      ctx.stroke();
-      ctx.restore();
+      const hip = { x: 0, y: -20 + pose.hipY };
+      const neck = limbJoint(hip.x, hip.y, pose.torsoHeight, -Math.PI / 2 + pose.torsoLean);
 
       ctx.beginPath();
-      ctx.arc(headBack, -92, 15, 0, Math.PI * 2);
+      ctx.moveTo(hip.x, hip.y);
+      ctx.lineTo(neck.x, neck.y);
       ctx.stroke();
 
-      const armY = -60;
+      const shoulder = { x: neck.x, y: neck.y + 12 + pose.shoulderY };
+      const headX = neck.x + pose.headDX;
+      const headY = neck.y - 20 + pose.headDY;
       ctx.beginPath();
-      ctx.moveTo(0, armY);
-      ctx.lineTo(-26 - f.dir * armKick * 0.45, -30 - armKick * 0.36);
-      ctx.moveTo(0, armY);
-      ctx.lineTo(26 - f.dir * armKick, -37 + armKick * 0.22);
+      ctx.arc(headX, headY, 15, 0, Math.PI * 2);
       ctx.stroke();
 
-      ctx.beginPath();
-      ctx.moveTo(0, -20);
-      ctx.lineTo(-18 - f.dir * legKick * 0.25, 24 + legKick * 0.3);
-      ctx.moveTo(0, -20);
-      ctx.lineTo(18 - f.dir * legKick * 0.78, 24 - legKick * 0.22);
-      ctx.stroke();
+      drawLimb(shoulder.x, shoulder.y, pose.backArm);
+      drawLimb(shoulder.x, shoulder.y, pose.frontArm);
+      drawLimb(hip.x, hip.y, pose.backLeg);
+      drawLimb(hip.x, hip.y, pose.frontLeg);
 
       ctx.restore();
     }
