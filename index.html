@@ -66,6 +66,8 @@
     const AI_THINK_RANGE = 0.35;
     const AI_ATTACK_WEIGHTS = { punch: 0.52, sweep: 0.84 };
     const ATTACK_ANIM_DURATION = { punch: 0.26, sweep: 0.38, special: 0.56 };
+    const UPPER_LIMB_LENGTH = 24;
+    const LOWER_LIMB_LENGTH = 22;
 
     const keys = Object.create(null);
     const justPressed = Object.create(null);
@@ -237,7 +239,6 @@
     }
 
     function updateAI(dt) {
-      enemy.moveInput = 0;
       if (game.over || game.takedown || enemy.dead) return;
       game.aiThink -= dt;
       const dist = Math.abs(player.x - enemy.x);
@@ -261,7 +262,6 @@
     }
 
     function updatePlayer(dt) {
-      player.moveInput = 0;
       if (game.over || game.takedown || player.dead) return;
       const move = (keys["d"] ? 1 : 0) - (keys["a"] ? 1 : 0);
       player.moveInput = move;
@@ -354,7 +354,7 @@
         backLeg: { hip: 1.45 + walkBlend * 0.45 * invStep, knee: 0.34 + recoilLeg },
       };
 
-      if (pose.frontArm && walkBlend > 0.05) {
+      if (walkBlend > 0.05) {
         pose.frontArm.shoulder += walkBlend * 0.6 * invStep;
         pose.backArm.shoulder += walkBlend * 0.6 * step;
       }
@@ -433,8 +433,8 @@
     }
 
     function drawLimb(baseX, baseY, cfg) {
-      const upper = limbJoint(baseX, baseY, 24, cfg.shoulder);
-      const lower = limbJoint(upper.x, upper.y, 22, cfg.shoulder + cfg.elbow);
+      const upper = limbJoint(baseX, baseY, UPPER_LIMB_LENGTH, cfg.shoulder);
+      const lower = limbJoint(upper.x, upper.y, LOWER_LIMB_LENGTH, cfg.shoulder + cfg.elbow);
       ctx.beginPath();
       ctx.moveTo(baseX, baseY);
       ctx.lineTo(upper.x, upper.y);
@@ -576,6 +576,8 @@
 
       if (justPressed["r"]) reset();
       const dt = rawDt * game.timeScale;
+      player.moveInput = 0;
+      enemy.moveInput = 0;
 
       updatePlayer(dt);
       updateAI(dt);
